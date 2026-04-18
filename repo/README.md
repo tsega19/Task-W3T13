@@ -4,19 +4,6 @@ Browser-native offline diagramming SPA (Angular 17). Zero backend, all data in I
 
 ## Quick start
 
-Two supported paths — pick either.
-
-### Option A: Local Node toolchain (Node 20+)
-
-```bash
-npm install
-npm start       # runs `ng serve` on http://localhost:4200
-```
-
-Additional scripts: `npm run build`, `npm test` (Jest with coverage), `npm run test:e2e` (Playwright), `npm run lint` (typecheck).
-
-### Option B: Docker 20+
-
 ```bash
 docker-compose up --build
 ```
