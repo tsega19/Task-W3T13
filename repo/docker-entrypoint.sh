@@ -1,0 +1,39 @@
+#!/bin/sh
+# Emits /usr/share/nginx/html/env.js from container env vars so the Angular SPA
+# can read configuration through its centralized config module at runtime.
+# Keeps every env var declared in docker-compose.yml (no .env file needed).
+
+set -eu
+
+ENV_JS="/usr/share/nginx/html/env.js"
+
+cat > "$ENV_JS" <<EOF
+window.__FC_ENV__ = {
+  APP_NAME: "${APP_NAME:-FlowCanvas Offline Studio}",
+  APP_PORT: "${APP_PORT:-4200}",
+  ENABLE_TLS: "${ENABLE_TLS:-false}",
+  AUTH_MAX_FAILED_ATTEMPTS: "${AUTH_MAX_FAILED_ATTEMPTS:-3}",
+  AUTH_COOLDOWN_MINUTES: "${AUTH_COOLDOWN_MINUTES:-15}",
+  AUTH_INACTIVITY_MINUTES: "${AUTH_INACTIVITY_MINUTES:-30}",
+  PROJECTS_MAX: "${PROJECTS_MAX:-50}",
+  CANVAS_MAX_PER_PROJECT: "${CANVAS_MAX_PER_PROJECT:-20}",
+  CANVAS_ELEMENT_CAP: "${CANVAS_ELEMENT_CAP:-5000}",
+  CANVAS_AUTOSAVE_MS: "${CANVAS_AUTOSAVE_MS:-10000}",
+  CANVAS_VERSION_GAP_MS: "${CANVAS_VERSION_GAP_MS:-60000}",
+  CANVAS_MAX_VERSIONS: "${CANVAS_MAX_VERSIONS:-30}",
+  CANVAS_UNDO_LIMIT: "${CANVAS_UNDO_LIMIT:-200}",
+  IMPORT_MAX_NODES: "${IMPORT_MAX_NODES:-1000}",
+  IMAGE_MAX_BYTES: "${IMAGE_MAX_BYTES:-52428800}",
+  DIAG_STORAGE_WARN_PCT: "${DIAG_STORAGE_WARN_PCT:-75}",
+  DIAG_CAP_WARN_PCT: "${DIAG_CAP_WARN_PCT:-80}",
+  DIAG_SLOW_MS: "${DIAG_SLOW_MS:-500}",
+  SEED_ADMIN_USERNAME: "${SEED_ADMIN_USERNAME:-admin}",
+  SEED_ADMIN_PASSPHRASE: "${SEED_ADMIN_PASSPHRASE:-demo-change-me-admin}",
+  SEED_EDITOR_USERNAME: "${SEED_EDITOR_USERNAME:-editor}",
+  SEED_EDITOR_PASSPHRASE: "${SEED_EDITOR_PASSPHRASE:-demo-change-me-editor}",
+  SEED_REVIEWER_USERNAME: "${SEED_REVIEWER_USERNAME:-reviewer}",
+  SEED_REVIEWER_PASSPHRASE: "${SEED_REVIEWER_PASSPHRASE:-demo-change-me-reviewer}"
+};
+EOF
+
+exec "$@"

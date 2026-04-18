@@ -1,0 +1,52 @@
+services:
+  flowcanvas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flowcanvas-offline-studio:latest
+    container_name: flowcanvas
+    ports:
+      - "4200:80"
+    environment:
+      APP_NAME: "FlowCanvas Offline Studio"
+      APP_PORT: "4200"
+      ENABLE_TLS: "false"
+      AUTH_MAX_FAILED_ATTEMPTS: "3"
+      AUTH_COOLDOWN_MINUTES: "15"
+      AUTH_INACTIVITY_MINUTES: "30"
+      PROJECTS_MAX: "50"
+      CANVAS_MAX_PER_PROJECT: "20"
+      CANVAS_ELEMENT_CAP: "5000"
+      CANVAS_AUTOSAVE_MS: "10000"
+      CANVAS_VERSION_GAP_MS: "60000"
+      CANVAS_MAX_VERSIONS: "30"
+      CANVAS_UNDO_LIMIT: "200"
+      IMPORT_MAX_NODES: "1000"
+      IMAGE_MAX_BYTES: "52428800"
+      DIAG_STORAGE_WARN_PCT: "75"
+      DIAG_CAP_WARN_PCT: "80"
+      DIAG_SLOW_MS: "500"
+      # Demo-only credentials. These are intentionally labelled so operators
+      # change them before any real use. They are NOT a secure auth system.
+      SEED_ADMIN_USERNAME: "admin"
+      SEED_ADMIN_PASSPHRASE: "demo-change-me-admin"
+      SEED_EDITOR_USERNAME: "editor"
+      SEED_EDITOR_PASSPHRASE: "demo-change-me-editor"
+      SEED_REVIEWER_USERNAME: "reviewer"
+      SEED_REVIEWER_PASSPHRASE: "demo-change-me-reviewer"
+    restart: unless-stopped
+
+  flowcanvas-tests:
+    profiles: ["tests"]
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: flowcanvas-offline-studio-tests:latest
+    container_name: flowcanvas-tests
+    environment:
+      CI: "1"
+      E2E_BASE_URL: "http://flowcanvas:80"
+    depends_on:
+      - flowcanvas
+    volumes:
+      - ./.tmp:/app/.tmp

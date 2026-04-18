@@ -1,0 +1,7 @@
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy
+WORKDIR /app
+ENV CI=1
+COPY package.json ./
+RUN npm install --no-audit --no-fund --loglevel=error
+COPY . .
+CMD ["bash", "-lc", "npm run test:unit -- --ci && npm run test:e2e"]

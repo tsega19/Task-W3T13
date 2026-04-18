@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.tmp/
+out-tsc/
+.vscode/
+.idea/
+*.log
+.cache/
+.claude/
+coverage/
+.venv/
