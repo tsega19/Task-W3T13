@@ -20,7 +20,15 @@ function mount(initial: AdminSettings, saveSpy = jest.fn(async () => undefined))
 }
 
 function empty(): AdminSettings {
-  return { dictionaries: [], templates: [], tagPalette: [], announcements: [] };
+  return {
+    dictionaries: [],
+    templates: [],
+    tagPalette: [],
+    announcements: [],
+    channels: [],
+    topics: [],
+    featuredSlots: { maxSlots: 1, rotationDays: 14 }
+  };
 }
 
 describe('AdminPanelComponent', () => {
@@ -29,7 +37,10 @@ describe('AdminPanelComponent', () => {
       dictionaries: [{ id: 'd1', term: 't', definition: 'x' }],
       templates: [{ id: 't1', name: 'n', body: 'b' }],
       tagPalette: ['design'],
-      announcements: ['hello']
+      announcements: ['hello'],
+      channels: [],
+      topics: [],
+      featuredSlots: { maxSlots: 1, rotationDays: 14 }
     };
     const { fixture } = mount(source);
     fixture.componentInstance.draft().announcements.push('new');
@@ -84,6 +95,45 @@ describe('AdminPanelComponent', () => {
     expect(fixture.componentInstance.draft().templates.length).toBe(0);
   });
 
+  it('addChannel / removeChannel manage channel entries and cascade to topics/templates', () => {
+    const { fixture } = mount(empty());
+    const c = fixture.componentInstance;
+    c.addChannel();
+    c.addChannel();
+    const chId = c.draft().channels[0].id;
+    c.draft().topics.push({ id: 'tp1', channelId: chId, name: 'topic-1' });
+    c.draft().templates.push({ id: 'tpl1', name: 'x', body: 'y', channelId: chId });
+    c.removeChannel(0);
+    expect(c.draft().channels.length).toBe(1);
+    // Dependent topics are removed; dependent template channelId is cleared.
+    expect(c.draft().topics.find((t) => t.channelId === chId)).toBeUndefined();
+    expect(c.draft().templates[0].channelId).toBeUndefined();
+  });
+
+  it('addTopic is a no-op when there are no channels, and otherwise assigns the first channel', () => {
+    const { fixture } = mount(empty());
+    const c = fixture.componentInstance;
+    c.addTopic();
+    expect(c.draft().topics.length).toBe(0);
+    c.addChannel();
+    c.addTopic();
+    expect(c.draft().topics.length).toBe(1);
+    expect(c.draft().topics[0].channelId).toBe(c.draft().channels[0].id);
+    c.removeTopic(0);
+    expect(c.draft().topics.length).toBe(0);
+  });
+
+  it('save() clamps featuredSlots numbers to non-negative integers before forwarding', async () => {
+    const save = jest.fn(async () => undefined);
+    const { fixture } = mount({ ...empty(), featuredSlots: { maxSlots: -3, rotationDays: 1.9 } }, save);
+    await fixture.componentInstance.save();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        featuredSlots: { maxSlots: 0, rotationDays: 1 }
+      })
+    );
+  });
+
   it('save() forwards the current draft to AdminService.save and surfaces a success toast', async () => {
     const save = jest.fn(async () => undefined);
     const { fixture } = mount(empty(), save);
@@ -99,7 +149,10 @@ describe('AdminPanelComponent', () => {
       dictionaries: [{ id: 'd', term: 't', definition: 'x' }],
       templates: [{ id: 't', name: 'n', body: 'b' }],
       tagPalette: ['alpha'],
-      announcements: ['hi']
+      announcements: ['hi'],
+      channels: [],
+      topics: [],
+      featuredSlots: { maxSlots: 1, rotationDays: 14 }
     });
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;

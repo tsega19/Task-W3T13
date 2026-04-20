@@ -6,6 +6,7 @@ import { PermissionService } from '../../core/services/permission.service';
 import { AuditService } from '../../core/services/audit.service';
 import { LoggerService } from '../../logging/logger.service';
 import { NotificationService } from '../../core/services/notification.service';
+import { AdminService } from '../admin/admin.service';
 import { ProjectRecord, CanvasRecord } from '../../core/models/models';
 import { uuid } from '../../core/services/crypto.util';
 
@@ -23,6 +24,7 @@ export class ProjectService {
   private readonly audit = inject(AuditService);
   private readonly logger = inject(LoggerService);
   private readonly notif = inject(NotificationService);
+  private readonly admin = inject(AdminService);
 
   async list(): Promise<ProjectRecord[]> {
     const all = await this.db.projects.all();
@@ -143,12 +145,20 @@ export class ProjectService {
   async setFeatured(id: string, featured: boolean): Promise<void> {
     this.perm.enforce('project.feature');
     const all = await this.db.projects.all();
+    const maxSlots = Math.max(0, this.admin.settings().featuredSlots?.maxSlots ?? 0);
     if (featured) {
-      for (const p of all) {
-        if (p.featured && p.id !== id) {
+      const others = all.filter((p) => p.featured && p.id !== id);
+      // When capacity is exhausted, unfeature the oldest-updated slot so the
+      // newly-featured project can take a seat. Preserves the admin-defined
+      // cap without failing the caller.
+      const excess = others.length - Math.max(0, maxSlots - 1);
+      if (excess > 0) {
+        const evictable = [...others].sort((a, b) => a.updatedAt - b.updatedAt).slice(0, excess);
+        for (const p of evictable) {
           p.featured = false;
           p.updatedAt = Date.now();
           await this.db.projects.put(p);
+          await this.audit.record(this.auth.session(), 'project.unfeature.evicted', 'project', p.id, `slot-cap=${maxSlots}`);
         }
       }
     }

@@ -3,7 +3,7 @@ import { DbService } from '../../core/services/db.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PermissionService } from '../../core/services/permission.service';
 import { AuditService } from '../../core/services/audit.service';
-import { ReviewRecord, TicketRecord, ReviewStatus, TicketPriority, TicketStatus } from '../../core/models/models';
+import { ReviewRecord, TicketRecord, ReviewStatus, TicketPriority, TicketStatus, BlobRecord } from '../../core/models/models';
 import { uuid } from '../../core/services/crypto.util';
 
 @Injectable({ providedIn: 'root' })
@@ -52,7 +52,7 @@ export class ReviewService {
     await this.audit.record(this.auth.session(), 'review.status', 'review', id, status);
   }
 
-  async createTicket(input: { reviewId: string; canvasId: string; projectId: string; title: string; description: string; priority: TicketPriority }): Promise<TicketRecord> {
+  async createTicket(input: { reviewId: string; canvasId: string; projectId: string; title: string; description: string; priority: TicketPriority; attachmentIds?: string[] }): Promise<TicketRecord> {
     this.perm.enforce('review.create');
     const title = (input.title ?? '').trim();
     const desc = (input.description ?? '').trim();
@@ -71,11 +71,54 @@ export class ReviewService {
       createdBy: this.auth.session()?.userId ?? 'anonymous',
       createdAt: now,
       updatedAt: now,
-      attachmentIds: []
+      attachmentIds: input.attachmentIds ? [...input.attachmentIds] : []
     };
     await this.db.tickets.put(rec);
     await this.audit.record(this.auth.session(), 'ticket.create', 'ticket', rec.id);
     return rec;
+  }
+
+  /**
+   * Persist a raw file as a `BlobRecord` and return the generated key.
+   * Callers push the returned key onto a ticket's `attachmentIds`.
+   */
+  async uploadAttachment(file: File): Promise<string> {
+    this.perm.enforce('review.create');
+    const buf = await file.arrayBuffer();
+    const rec: BlobRecord = {
+      key: uuid(),
+      name: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+      data: buf,
+      createdAt: Date.now()
+    };
+    await this.db.blobs.put(rec);
+    return rec.key;
+  }
+
+  async getAttachment(key: string): Promise<BlobRecord | undefined> {
+    return this.db.blobs.get(key);
+  }
+
+  async addAttachmentToTicket(ticketId: string, key: string): Promise<void> {
+    this.perm.enforce('review.create');
+    const rec = (await this.db.tickets.all()).find((t) => t.id === ticketId);
+    if (!rec) throw new Error('Ticket not found.');
+    if (!rec.attachmentIds.includes(key)) rec.attachmentIds = [...rec.attachmentIds, key];
+    rec.updatedAt = Date.now();
+    await this.db.tickets.put(rec);
+    await this.audit.record(this.auth.session(), 'ticket.attachment.add', 'ticket', ticketId, key);
+  }
+
+  async removeAttachmentFromTicket(ticketId: string, key: string): Promise<void> {
+    this.perm.enforce('review.create');
+    const rec = (await this.db.tickets.all()).find((t) => t.id === ticketId);
+    if (!rec) return;
+    rec.attachmentIds = rec.attachmentIds.filter((k) => k !== key);
+    rec.updatedAt = Date.now();
+    await this.db.tickets.put(rec);
+    await this.audit.record(this.auth.session(), 'ticket.attachment.remove', 'ticket', ticketId, key);
   }
 
   async updateTicketStatus(id: string, status: TicketStatus): Promise<void> {

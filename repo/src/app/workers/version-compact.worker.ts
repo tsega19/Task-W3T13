@@ -12,12 +12,9 @@ addEventListener('message', (ev: MessageEvent) => {
   if (msg.type !== 'COMPACT') return;
   const sorted = [...msg.payload.versions].sort((a, b) => a.versionNumber - b.versionNumber);
   const deletions: string[] = [];
-  while (sorted.length > msg.payload.maxVersions) {
+  while (sorted.length >= msg.payload.maxVersions) {
     const v = sorted.shift();
     if (v) deletions.push(v.id);
   }
-  for (const id of deletions) {
-    (postMessage as (m: unknown) => void)({ type: 'DELETE_VERSION', id });
-  }
-  (postMessage as (m: unknown) => void)({ type: 'COMPACT_DONE', deleted: deletions.length });
+  (postMessage as (m: unknown) => void)({ type: 'COMPACT_PLAN', deletions });
 });

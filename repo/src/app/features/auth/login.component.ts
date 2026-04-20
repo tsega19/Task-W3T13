@@ -29,11 +29,11 @@ import { LoggerService } from '../../logging/logger.service';
           Too many failed attempts. Try again in {{ cooldownLabel() }}.
         </p>
         <details class="seed-hints">
-          <summary>Seeded accounts</summary>
+          <summary>Seeded accounts (demo defaults — override via env before any real use)</summary>
           <ul>
-            <li>admin / Admin&#64;flowcanvas1</li>
-            <li>editor / Editor&#64;flowcanvas1</li>
-            <li>reviewer / Reviewer&#64;flowcanvas1</li>
+            <li>admin / demo-change-me-admin</li>
+            <li>editor / demo-change-me-editor</li>
+            <li>reviewer / demo-change-me-reviewer</li>
           </ul>
         </details>
       </form>

@@ -66,7 +66,11 @@ function mount(opts: {
       return ticket('new', reviews[0]?.id ?? 'r1');
     }),
     updateReviewStatus: jest.fn(async () => undefined),
-    updateTicketStatus: jest.fn(async () => undefined)
+    updateTicketStatus: jest.fn(async () => undefined),
+    uploadAttachment: jest.fn(async (file: File) => `key-${file.name}`),
+    addAttachmentToTicket: jest.fn(async () => undefined),
+    removeAttachmentFromTicket: jest.fn(async () => undefined),
+    getAttachment: jest.fn(async (key: string) => ({ key, name: `name-${key}`, mimeType: 'text/plain', sizeBytes: 42, data: new ArrayBuffer(1), createdAt: 1 }))
   };
 
   const db = {
@@ -189,17 +193,17 @@ describe('ReviewerPanelComponent', () => {
     const r = review('r1', 'c1', 'p1');
     const { fixture, svc } = mount({ reviews: [r] });
     await fixture.componentInstance.ngOnInit();
-    fixture.componentInstance.ticketDrafts[r.id] = { title: 't', description: 'd', priority: 'high' };
+    fixture.componentInstance.ticketDrafts[r.id] = { title: 't', description: 'd', priority: 'high', attachmentIds: [] };
     await fixture.componentInstance.addTicket(r);
     expect(svc.createTicket).toHaveBeenCalledWith(expect.objectContaining({ reviewId: 'r1', title: 't', priority: 'high' }));
-    expect(fixture.componentInstance.ticketDrafts[r.id]).toEqual({ title: '', description: '', priority: 'medium' });
+    expect(fixture.componentInstance.ticketDrafts[r.id]).toEqual({ title: '', description: '', priority: 'medium', attachmentIds: [] });
   });
 
   it('addTicket surfaces service errors via notification.error', async () => {
     const r = review('r1', 'c1', 'p1');
     const { fixture } = mount({ reviews: [r], createTicketError: new Error('bad title') });
     await fixture.componentInstance.ngOnInit();
-    fixture.componentInstance.ticketDrafts[r.id] = { title: '', description: 'd', priority: 'low' };
+    fixture.componentInstance.ticketDrafts[r.id] = { title: '', description: 'd', priority: 'low', attachmentIds: [] };
     await fixture.componentInstance.addTicket(r);
     const notif = TestBed.inject(NotificationService) as unknown as { error: jest.Mock };
     expect(notif.error).toHaveBeenCalledWith('bad title');
@@ -214,5 +218,154 @@ describe('ReviewerPanelComponent', () => {
     await fixture.componentInstance.setTicketStatus(t, 'done');
     expect(svc.updateReviewStatus).toHaveBeenCalledWith('r1', 'resolved');
     expect(svc.updateTicketStatus).toHaveBeenCalledWith('t1', 'done');
+  });
+
+  it('onDraftAttachmentPick uploads each file and stores its key in the draft', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const { fixture, svc } = mount({ reviews: [r] });
+    await fixture.componentInstance.ngOnInit();
+    const f1 = new File(['a'], 'a.txt', { type: 'text/plain' });
+    const f2 = new File(['bb'], 'b.txt', { type: 'text/plain' });
+    const input = { target: { files: [f1, f2], value: 'x' } } as unknown as Event;
+    await fixture.componentInstance.onDraftAttachmentPick(input, r.id);
+    expect(svc.uploadAttachment).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.ticketDrafts[r.id].attachmentIds).toEqual(['key-a.txt', 'key-b.txt']);
+    // Metadata cached via the picker path — exposed by attachmentName/attachmentMeta.
+    expect(fixture.componentInstance.attachmentName('key-a.txt')).toBe('a.txt');
+    const meta = fixture.componentInstance.attachmentMeta('key-a.txt');
+    expect(meta?.sizeBytes).toBe(1);
+    // Removing a draft attachment strips it from the list.
+    fixture.componentInstance.removeDraftAttachment(r.id, 'key-a.txt');
+    expect(fixture.componentInstance.ticketDrafts[r.id].attachmentIds).toEqual(['key-b.txt']);
+  });
+
+  it('onDraftAttachmentPick surfaces upload errors through notification.error without blowing up the rest of the batch', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const { fixture, svc } = mount({ reviews: [r] });
+    await fixture.componentInstance.ngOnInit();
+    (svc.uploadAttachment as jest.Mock)
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockResolvedValueOnce('key-b.txt');
+    const f1 = new File(['a'], 'a.txt', { type: 'text/plain' });
+    const f2 = new File(['b'], 'b.txt', { type: 'text/plain' });
+    const input = { target: { files: [f1, f2], value: 'x' } } as unknown as Event;
+    await fixture.componentInstance.onDraftAttachmentPick(input, r.id);
+    const notif = TestBed.inject(NotificationService) as unknown as { error: jest.Mock };
+    expect(notif.error).toHaveBeenCalledWith(expect.stringMatching(/disk full/));
+    expect(fixture.componentInstance.ticketDrafts[r.id].attachmentIds).toEqual(['key-b.txt']);
+  });
+
+  it('onAddAttachment uploads + attaches to an existing ticket and triggers a refresh', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const t = ticket('t1', 'r1');
+    const { fixture, svc } = mount({ reviews: [r], tickets: [t] });
+    await fixture.componentInstance.ngOnInit();
+    const file = new File(['x'], 'c.txt', { type: 'text/plain' });
+    const input = { target: { files: [file], value: 'x' } } as unknown as Event;
+    await fixture.componentInstance.onAddAttachment(input, t);
+    expect(svc.uploadAttachment).toHaveBeenCalledWith(file);
+    expect(svc.addAttachmentToTicket).toHaveBeenCalledWith('t1', 'key-c.txt');
+  });
+
+  it('onAddAttachment is a no-op when the user cancels the file dialog', async () => {
+    const t = ticket('t1', 'r1');
+    const { fixture, svc } = mount({ reviews: [review('r1', 'c1', 'p1')], tickets: [t] });
+    await fixture.componentInstance.ngOnInit();
+    const input = { target: { files: [], value: 'x' } } as unknown as Event;
+    await fixture.componentInstance.onAddAttachment(input, t);
+    expect(svc.uploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it('removeAttachment delegates to the service and refreshes', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const t = ticket('t1', 'r1');
+    const { fixture, svc } = mount({ reviews: [r], tickets: [t] });
+    await fixture.componentInstance.ngOnInit();
+    await fixture.componentInstance.removeAttachment(t, 'k1');
+    expect(svc.removeAttachmentFromTicket).toHaveBeenCalledWith('t1', 'k1');
+  });
+
+  it('openAttachment fetches the record and runs the download sequence', async () => {
+    const { fixture, svc } = mount({ reviews: [review('r1', 'c1', 'p1')] });
+    await fixture.componentInstance.ngOnInit();
+    const urlAny = URL as unknown as { createObjectURL: (b: Blob) => string; revokeObjectURL: (u: string) => void };
+    const origCreate = urlAny.createObjectURL;
+    const origRevoke = urlAny.revokeObjectURL;
+    const createSpy = jest.fn((_b: Blob) => 'blob:fake');
+    const revokeSpy = jest.fn((_u: string) => undefined);
+    urlAny.createObjectURL = createSpy;
+    urlAny.revokeObjectURL = revokeSpy;
+    try {
+      await fixture.componentInstance.openAttachment('k1');
+      expect(svc.getAttachment).toHaveBeenCalledWith('k1');
+      expect(createSpy).toHaveBeenCalled();
+      expect(revokeSpy).toHaveBeenCalledWith('blob:fake');
+    } finally {
+      urlAny.createObjectURL = origCreate;
+      urlAny.revokeObjectURL = origRevoke;
+    }
+  });
+
+  it('openAttachment surfaces an error toast when the record is missing', async () => {
+    const { fixture, svc } = mount({ reviews: [review('r1', 'c1', 'p1')] });
+    await fixture.componentInstance.ngOnInit();
+    (svc.getAttachment as jest.Mock).mockResolvedValueOnce(undefined);
+    await fixture.componentInstance.openAttachment('missing');
+    const notif = TestBed.inject(NotificationService) as unknown as { error: jest.Mock };
+    expect(notif.error).toHaveBeenCalledWith('Attachment not found.');
+  });
+
+  it('formatSize renders B / KB / MB based on the byte count magnitude', () => {
+    const { fixture } = mount({});
+    const c = fixture.componentInstance;
+    expect(c.formatSize(512)).toBe('512 B');
+    expect(c.formatSize(2048)).toBe('2.0 KB');
+    expect(c.formatSize(5 * 1024 * 1024)).toBe('5.0 MB');
+  });
+
+  it('attachmentName falls back to a truncated key when metadata has not hydrated yet', () => {
+    const { fixture } = mount({});
+    // No upload path invoked => cache is empty; fall-through is the first 8 chars of the key.
+    expect(fixture.componentInstance.attachmentName('abcdef1234567890')).toBe('abcdef12');
+    expect(fixture.componentInstance.attachmentMeta('abcdef1234567890')).toBeUndefined();
+  });
+
+  it('hydrateAttachmentMeta fetches unknown keys, caches them, and skips already-cached keys on the next refresh', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const t: TicketRecord = { ...ticket('t1', 'r1'), attachmentIds: ['k1', 'k2'] };
+    const { fixture, svc } = mount({ reviews: [r], tickets: [t] });
+    await fixture.componentInstance.ngOnInit();
+    // First ngOnInit triggered getAttachment once per key.
+    expect((svc.getAttachment as jest.Mock).mock.calls.map((c) => c[0]).sort()).toEqual(['k1', 'k2']);
+    expect(fixture.componentInstance.attachmentName('k1')).toBe('name-k1');
+    (svc.getAttachment as jest.Mock).mockClear();
+    // Second refresh: both keys are already in the cache so the "continue" branch fires.
+    await fixture.componentInstance.refresh();
+    expect(svc.getAttachment).not.toHaveBeenCalled();
+  });
+
+  it('hydrateAttachmentMeta skips caching when the service returns undefined for a key', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const t: TicketRecord = { ...ticket('t1', 'r1'), attachmentIds: ['missing'] };
+    const { fixture, svc } = mount({ reviews: [r], tickets: [t] });
+    (svc.getAttachment as jest.Mock).mockResolvedValueOnce(undefined);
+    await fixture.componentInstance.ngOnInit();
+    // No metadata cached for missing key — attachmentName falls back to the truncated key.
+    expect(fixture.componentInstance.attachmentMeta('missing')).toBeUndefined();
+  });
+
+  it('onDraftAttachmentPick tolerates an input with a null FileList (?? [] fallback)', async () => {
+    const r = review('r1', 'c1', 'p1');
+    const { fixture, svc } = mount({ reviews: [r] });
+    await fixture.componentInstance.ngOnInit();
+    const input = { target: { files: null, value: 'x' } } as unknown as Event;
+    await fixture.componentInstance.onDraftAttachmentPick(input, r.id);
+    expect(svc.uploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it('removeDraftAttachment is a no-op when the reviewId has no draft entry', () => {
+    const { fixture } = mount({});
+    // Unknown reviewId — `if (d)` is false and we bail early.
+    expect(() => fixture.componentInstance.removeDraftAttachment('unknown-review', 'k1')).not.toThrow();
   });
 });

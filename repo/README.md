@@ -58,10 +58,10 @@ This builds a Playwright-ready image, runs Jest unit tests (coverage in `.tmp/co
 - `src/app/core/services/` — `DbService` (IndexedDB via `idb`), `AuthService` (SHA-256 WebCrypto, 3-strike cooldown, 30-min inactivity), `PermissionService` (capability matrix), `BroadcastService` (multi-tab), `NotificationService`, `AuditService`.
 - `src/app/core/guards/` — `authGuard` protects routes (login required); roles are used only for UI filtering, not route enforcement.
 - `src/app/features/` — `auth`, `projects`, `canvas`, `admin`, `reviewer`, `diagnostics`, `backup`.
-- `src/app/workers/` — import, SVG export, version compaction.
+- `src/app/workers/` — import, SVG export, PNG export, version compaction.
 - Service Worker for offline-first PWA.
 
-See [`docs/design.md`](../docs/design.md) for full details. Additional docs: [`docs/api_aspec.md`](../docs/api_aspec.md), [`docs/questions.md`](../docs/questions.md).
+Design and architecture details are summarized inline below and in source comments under `src/app/` (see each feature folder's components and services).
 
 ## User-visible guarantees
 

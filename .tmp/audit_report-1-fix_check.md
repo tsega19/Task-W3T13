@@ -1,57 +1,79 @@
-# audit_report-1.md — Fix Check (Static)
+1. Verdict
+- Pass
 
-Date: 2026-04-18
+2. Scope and Verification Boundary
+- Re-check performed statically in current working directory after fixes.
+- Excluded from evidence: `./.tmp/` and subdirectories.
+- Not executed: runtime, tests, build, Docker.
+- Cannot statically confirm: runtime rendering/performance/offline install and live multi-tab behavior.
 
-Scope: Static verification only within `./repo/` and `./docs/` (no execution). `./.tmp/` excluded as evidence source.
+3. Prompt / Repository Mapping Summary
+- Revalidated previously failed Prompt-critical areas:
+  - Workerization for PNG and version compaction
+  - Ticket attachment lifecycle
+  - Export blob persistence
+  - Notification Center visibility and import change logging
+- Confirmed these are now present in source.
 
-## Summary Verdict
-- **All 6 listed issues: PASS (fixed)**
+4. High / Blocker Coverage Panel
+- A. Prompt-fit / completeness blockers: Pass
+  - Prior High gaps now closed in static code.
+- B. Static delivery / structure blockers: Pass
+  - README and credential guidance now aligned.
+- C. Frontend-controllable interaction / state blockers: Pass
+  - Core modal/disabled/error/notification states remain present and wired.
+- D. Data exposure / delivery-risk blockers: Pass
+  - No real sensitive exposure found; redaction retained.
+- E. Test-critical gaps: Partial Pass
+  - Test suites exist, but not executed in this static fix-check.
 
-## Checks (evidence)
+5. Confirmed Blocker / High Findings
+- None.
 
-### 1) FC-BLK-01 — README/doc/entrypoint inconsistencies
-- **Status:** PASS
-- **Evidence:**
-  - Non-Docker start path documented: `repo/README.md:7`
-  - `npm install` / `npm start` documented: `repo/README.md:11`
-  - Corrected design doc link to `docs/design.md`: `repo/README.md:61`
-  - Roles enforcement wording updated: `repo/README.md:56`
+6. Other Findings Summary
+- Severity: Medium
+  - Conclusion: Some declared lightweight preference keys (theme/hotkey/feature flags) are not fully evidenced as end-user flows.
+  - Evidence: key declarations in `src/app/core/services/session-storage.util.ts:2-6`; active usage clearly shown for session/cooldown/last project.
+  - Minimum actionable fix: either wire these preferences to visible settings UI/behavior or document intentional deferment.
 
-### 2) FC-BLK-02 — “Exactly 8 built-in components” mismatch
-- **Status:** PASS
-- **Evidence:**
-  - Element type list matches required 8: `repo/src/app/core/models/models.ts:28`
-  - Editor palette uses `ELEMENT_TYPES`: `repo/src/app/features/canvas/canvas-editor.component.ts:30`
-  - `createElement()` supports required types (button/input/container/label present): `repo/src/app/features/canvas/canvas.service.ts:67`
-  - Input placeholder added in model: `repo/src/app/core/models/models.ts:63`
-  - Inspector exposes placeholder for input: `repo/src/app/features/canvas/canvas-editor.component.ts:128`
+7. Data Exposure and Delivery Risk Summary
+- Real sensitive information exposure: Pass
+  - Evidence: redaction logic `src/app/logging/logger.service.ts:14-37`.
+- Hidden debug/config/demo-only surfaces: Pass
+  - Evidence: seeded guidance consistent across README/UI/config.
+- Undisclosed mock scope/default mock behavior: Pass
+  - Evidence: offline/no-backend scope disclosed in README.
+- Fake-success/misleading delivery behavior: Pass
+  - Evidence: Notification Center now visible and uses notification messages.
+- Visible UI/console/storage leakage risk: Pass
 
-### 3) FC-HI-01 — Roles enforced (guards + permission throwing)
-- **Status:** PASS
-- **Evidence:**
-  - `roleGuard(...)` removed from router; only `authGuard` remains: `repo/src/app/app.routes.ts:1`
-  - `role.guard.ts` removed: `repo/src/app/core/guards/role.guard.ts` (missing)
-  - `PermissionService.enforce()` is advisory (non-throwing): `repo/src/app/core/services/permission.service.ts:52`
+8. Test Sufficiency Summary
+Test Overview
+- Unit tests exist: yes (`jest.config.js` + many `src/**/*.spec.ts`).
+- Component tests exist: yes.
+- Page/route integration tests exist: partial.
+- E2E tests exist: yes (`tests/e2e/*.spec.ts`).
+- Entry points: `npm test`, `npm run test:e2e`.
 
-### 4) FC-HI-02 — “Immutable audit timeline” violated (pruning / wipe on restore)
-- **Status:** PASS
-- **Evidence:**
-  - Audit service no longer prunes/deletes: `repo/src/app/core/services/audit.service.ts:18`
-  - Restore preserves `audit_log` (non-wipe store): `repo/src/app/features/backup/backup.service.ts:17`
-  - Restore writes immutable begin/complete bookend events: `repo/src/app/features/backup/backup.service.ts:47`
+Core Coverage
+- happy path: partially covered
+- key failure paths: partially covered
+- interaction / state coverage: partially covered
 
-### 5) Medium — Backup restore lacks size checks
-- **Status:** PASS
-- **Evidence:**
-  - Restore max bytes constant (100MB): `repo/src/app/features/backup/backup.service.ts:21`
-  - UI pre-check rejects oversized bundle before parse: `repo/src/app/features/backup/backup.component.ts:64`
-  - UI displays max size label: `repo/src/app/features/backup/backup.component.ts:28`
+Major Gaps
+- Runtime-only behaviors still need manual verification despite test presence.
 
-### 6) Medium — Import rename Notification Center message not enumerating renames
-- **Status:** PASS
-- **Evidence:**
-  - Import notification body includes up to 10 rename pairs + truncation hint: `repo/src/app/features/canvas/canvas-editor.component.ts:725`
+Final Test Verdict
+- Partial Pass
 
-## Verification Boundary Notes
-- This fix-check only confirms static presence/absence of code paths and docs; it does not confirm runtime behavior, rendering, or offline installability.
+9. Engineering Quality Summary
+- Updated codebase remains coherent and now aligns with previously missing Prompt-critical architecture/features.
 
+10. Visual and Interaction Summary
+- Static structure now includes Notification Center UI and attachment/export flows in addition to prior UI structure.
+- Final runtime UX quality still requires manual execution.
+
+11. Next Actions
+1. Run unit/e2e tests and capture outputs as delivery evidence.
+2. Perform manual runtime checks for offline install/use and multi-tab conflict UX.
+3. Complete or document optional preference-key flows (theme/hotkey/feature flags).

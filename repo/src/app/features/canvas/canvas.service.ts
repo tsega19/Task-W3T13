@@ -137,17 +137,33 @@ export class CanvasService {
       .filter((g) => g.elementIds.length > 0);
   }
 
-  async createVersion(canvas: CanvasRecord, label?: string): Promise<VersionRecord> {
+  /**
+   * Create a new version snapshot. The optional `compactor` lets callers (the
+   * canvas editor) plan version-pruning on a Web Worker and hand the IDs back
+   * for deletion. When no compactor is provided — or it fails — the service
+   * falls back to the same sort/while-prune plan inline so tests and worker-
+   * less environments still keep the version cap.
+   */
+  async createVersion(
+    canvas: CanvasRecord,
+    label?: string,
+    compactor?: (versions: VersionRecord[], maxVersions: number) => Promise<string[]>
+  ): Promise<VersionRecord> {
     const slowMs = this.cfg.get().diagnostics.slowMs;
     return trace(this.logger, 'canvas.createVersion', slowMs, async () => {
       const existing = (await this.db.versions.byCanvas(canvas.id)).sort((a, b) => a.versionNumber - b.versionNumber);
       const max = this.cfg.get().canvas.maxVersions;
-      while (existing.length >= max) {
-        const oldest = existing.shift();
-        if (oldest) {
-          await this.db.versions.delete(oldest.id);
-          this.logger.debug('canvas', 'version-compact', 'pruned oldest version', { id: oldest.id });
-        }
+      let deletions: string[];
+      try {
+        deletions = compactor ? await compactor(existing, max) : this.planVersionCompactionInline(existing, max);
+      } catch {
+        deletions = this.planVersionCompactionInline(existing, max);
+      }
+      for (const id of deletions) {
+        await this.db.versions.delete(id);
+        const idx = existing.findIndex((v) => v.id === id);
+        if (idx >= 0) existing.splice(idx, 1);
+        this.logger.debug('canvas', 'version-compact', 'pruned oldest version', { id });
       }
       const number = (existing[existing.length - 1]?.versionNumber ?? 0) + 1;
       const rec: VersionRecord = {
@@ -190,6 +206,25 @@ export class CanvasService {
       await this.audit.record(this.auth.session(), 'canvas.rollback', 'canvas', canvas.id, `to v${target.versionNumber}`);
       return canvas;
     });
+  }
+
+  /**
+   * Compute the list of version IDs that must be pruned so the count stays
+   * under `maxVersions` after a new version is added. Exposed so callers that
+   * live on the main thread (and can spawn a Web Worker) can replicate the
+   * same plan off-thread — the inline path is the fallback / test path.
+   */
+  planVersionCompactionInline(
+    versions: { id: string; versionNumber: number }[],
+    maxVersions: number
+  ): string[] {
+    const sorted = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
+    const deletions: string[] = [];
+    while (sorted.length >= maxVersions) {
+      const v = sorted.shift();
+      if (v) deletions.push(v.id);
+    }
+    return deletions;
   }
 
   renameDuplicateId(existingIds: Set<string>, rawId: string): string {

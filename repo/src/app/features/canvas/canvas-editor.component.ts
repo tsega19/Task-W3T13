@@ -691,7 +691,7 @@ export class CanvasEditorComponent implements OnInit, OnDestroy {
       this.lastSavedAt.set(Date.now());
       const gap = this.cfg.get().canvas.versionGapMs;
       if (Date.now() - this.lastVersionAt() > gap) {
-        await this.svc.createVersion(c);
+        await this.svc.createVersion(c, undefined, (versions, max) => this.planCompactionViaWorker(versions, max));
         this.lastVersionAt.set(Date.now());
       }
     } catch (e) {
@@ -737,13 +737,16 @@ export class CanvasEditorComponent implements OnInit, OnDestroy {
     }
     this.importResult.set(result);
     const summary = `Total: ${result.total}, imported: ${result.imported.length}, skipped: ${result.skipped.length}, renamed: ${result.renamed.length}`;
-    let body = summary;
+    const sections: string[] = [summary];
     if (result.renamed.length > 0) {
-      const preview = result.renamed.slice(0, 10).map((r) => `${r.original} → ${r.renamed}`).join('; ');
-      const suffix = result.renamed.length > 10 ? `; … +${result.renamed.length - 10} more (open summary for full list)` : '';
-      body = `${summary}. Renames: ${preview}${suffix}`;
+      const renames = result.renamed.map((r) => `${r.original} → ${r.renamed}`).join('; ');
+      sections.push(`Renames: ${renames}`);
     }
-    this.notif.log('info', 'Import complete', body);
+    if (result.skipped.length > 0) {
+      const skipped = result.skipped.map((s) => `row ${s.row}: ${s.reason}`).join('; ');
+      sections.push(`Skipped: ${skipped}`);
+    }
+    this.notif.log('info', 'Import complete', sections.join('. '));
   }
 
   async onImagePick(ev: Event): Promise<void> {
@@ -773,11 +776,14 @@ export class CanvasEditorComponent implements OnInit, OnDestroy {
     this.markDirty();
   }
 
-  exportJson(): void {
+  async exportJson(): Promise<void> {
     const c = this.canvas();
     if (!c) return;
     const payload = { name: c.name, elements: c.elements, connections: c.connections, groups: c.groups };
-    this.downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `${c.name}.json`);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const filename = `${c.name}.json`;
+    await this.persistExportBlob(blob, filename);
+    this.downloadBlob(blob, filename);
   }
 
   async exportSvg(): Promise<void> {
@@ -800,7 +806,10 @@ export class CanvasEditorComponent implements OnInit, OnDestroy {
     worker.postMessage({ type: 'EXPORT_SVG', payload: { elements: c.elements, connections: c.connections, blobMap } });
     const svg = await p.catch(() => renderStandaloneSvg(c.elements, c.connections, blobMap));
     worker.terminate();
-    this.downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `${c.name}.svg`);
+    const svgBlob = new Blob([svg], { type: 'image/svg+xml' });
+    const filename = `${c.name}.svg`;
+    await this.persistExportBlob(svgBlob, filename);
+    this.downloadBlob(svgBlob, filename);
   }
 
   async exportPng(): Promise<void> {
@@ -815,11 +824,108 @@ export class CanvasEditorComponent implements OnInit, OnDestroy {
     }
     const svg = renderStandaloneSvg(c.elements, c.connections, blobMap);
     try {
-      const pngBlob = await svgToPngBlob(svg);
-      this.downloadBlob(pngBlob, `${c.name}.png`);
+      const pngBlob = await this.renderPngViaWorker(svg);
+      const filename = `${c.name}.png`;
+      await this.persistExportBlob(pngBlob, filename);
+      this.downloadBlob(pngBlob, filename);
     } catch (e) {
       this.logger.error('canvas', 'export-png', 'failed', { error: String(e) });
       this.notif.error('PNG export failed.');
+    }
+  }
+
+  /**
+   * Dispatch version-compaction planning to `version-compact.worker` so the
+   * sort/while-prune work stays off the main thread. Handed to
+   * `CanvasService.createVersion` as a compactor callback. Falls back to the
+   * service's inline plan if the worker cannot be spawned or stays silent.
+   */
+  private planCompactionViaWorker(versions: VersionRecord[], maxVersions: number): Promise<string[]> {
+    const payload = {
+      versions: versions.map((v) => ({ id: v.id, versionNumber: v.versionNumber })),
+      maxVersions
+    };
+    return new Promise<string[]>((resolve) => {
+      let worker: Worker | null = null;
+      try {
+        worker = new Worker(new URL('../../workers/version-compact.worker', import.meta.url), { type: 'module' });
+      } catch {
+        resolve(this.svc.planVersionCompactionInline(payload.versions, maxVersions));
+        return;
+      }
+      const w = worker;
+      let settled = false;
+      const fallback = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { w.terminate(); } catch { /* noop */ }
+        resolve(this.svc.planVersionCompactionInline(payload.versions, maxVersions));
+      };
+      const timer = setTimeout(fallback, 250);
+      w.onmessage = (ev: MessageEvent) => {
+        if (settled) return;
+        const data = ev.data as { type: string; deletions?: string[] };
+        if (data.type === 'COMPACT_PLAN') {
+          settled = true;
+          clearTimeout(timer);
+          try { w.terminate(); } catch { /* noop */ }
+          resolve(data.deletions ?? []);
+        }
+      };
+      w.onerror = fallback;
+      w.postMessage({ type: 'COMPACT', payload });
+    });
+  }
+
+  private renderPngViaWorker(svg: string): Promise<Blob> {
+    return new Promise<Blob>((resolve, reject) => {
+      let worker: Worker | null = null;
+      try {
+        worker = new Worker(new URL('../../workers/export-png.worker', import.meta.url), { type: 'module' });
+      } catch {
+        svgToPngBlob(svg).then(resolve).catch(reject);
+        return;
+      }
+      const w = worker;
+      let settled = false;
+      const finish = (cb: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { w.terminate(); } catch { /* noop */ }
+        cb();
+      };
+      // Safety net: if the worker never responds (mocked in tests, or a
+      // missing OffscreenCanvas/createImageBitmap path), fall back to
+      // main-thread rasterization so PNG export still completes.
+      const timer = setTimeout(() => finish(() => { svgToPngBlob(svg).then(resolve).catch(reject); }), 4000);
+      w.onmessage = (ev: MessageEvent) => {
+        const data = ev.data as { type: string; buffer?: ArrayBuffer; mimeType?: string };
+        if (data.type === 'PNG_BLOB' && data.buffer) {
+          finish(() => resolve(new Blob([data.buffer!], { type: data.mimeType || 'image/png' })));
+        } else if (data.type === 'PNG_ERROR') {
+          finish(() => { svgToPngBlob(svg).then(resolve).catch(reject); });
+        }
+      };
+      w.onerror = () => finish(() => { svgToPngBlob(svg).then(resolve).catch(reject); });
+      w.postMessage({ type: 'EXPORT_PNG', payload: { svg } });
+    });
+  }
+
+  private async persistExportBlob(blob: Blob, filename: string): Promise<void> {
+    try {
+      const buf = await blob.arrayBuffer();
+      await this.db.blobs.put({
+        key: uuid(),
+        name: filename,
+        mimeType: blob.type || 'application/octet-stream',
+        sizeBytes: blob.size,
+        data: buf,
+        createdAt: Date.now()
+      });
+    } catch (e) {
+      this.logger.warn('canvas', 'export-persist', 'failed to persist export blob', { error: String(e), filename });
     }
   }
 

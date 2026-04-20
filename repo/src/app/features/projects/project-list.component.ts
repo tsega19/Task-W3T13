@@ -6,6 +6,7 @@ import { ProjectService } from './project.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PermissionService } from '../../core/services/permission.service';
 import { NotificationService } from '../../core/services/notification.service';
+import { AdminService } from '../admin/admin.service';
 import { ModalComponent } from '../../shared/components/modal.component';
 import { CanvasRecord, ProjectRecord } from '../../core/models/models';
 import { LS_KEYS, lsSet } from '../../core/services/session-storage.util';
@@ -33,6 +34,20 @@ import { LS_KEYS, lsSet } from '../../core/services/session-storage.util';
       </div>
 
       <p class="muted" *ngIf="projects().length === 0" data-testid="projects-empty">No projects yet.</p>
+
+      <section class="featured-strip" *ngIf="featuredProjects().length > 0" data-testid="projects-featured">
+        <strong class="muted small">Featured ({{ featuredProjects().length }} / {{ admin.settings().featuredSlots.maxSlots }})</strong>
+        <div class="featured-list">
+          <button type="button" class="chip featured linklike" *ngFor="let p of featuredProjects()" (click)="open(p)" [attr.data-testid]="'featured-' + p.id">{{ p.name }}</button>
+        </div>
+      </section>
+
+      <section class="channels" *ngIf="channels().length > 0" data-testid="projects-channels">
+        <strong class="muted small">Channels</strong>
+        <div class="channel-list">
+          <span class="chip" *ngFor="let ch of channels()" [attr.data-testid]="'channel-' + ch.id" [title]="ch.description">{{ ch.name }}</span>
+        </div>
+      </section>
 
       <table *ngIf="view === 'table' && filtered().length > 0" data-testid="projects-table">
         <thead>
@@ -134,6 +149,10 @@ import { LS_KEYS, lsSet } from '../../core/services/session-storage.util';
     .toggle button { border-radius: 0; }
     .toggle button:first-child { border-radius: 4px 0 0 4px; }
     .toggle button:last-child { border-radius: 0 4px 4px 0; }
+    .featured-strip, .channels { margin: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+    .featured-list, .channel-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip.featured { background: var(--warning); color: #0a1220; border: none; cursor: pointer; }
+    .small { font-size: 11px; }
   `]
 })
 export class ProjectListComponent implements OnInit {
@@ -141,6 +160,7 @@ export class ProjectListComponent implements OnInit {
   private readonly auth = inject(AuthService);
   readonly perm = inject(PermissionService);
   private readonly notif = inject(NotificationService);
+  readonly admin = inject(AdminService);
   private readonly router = inject(Router);
 
   projects = signal<ProjectRecord[]>([]);
@@ -175,6 +195,14 @@ export class ProjectListComponent implements OnInit {
     for (const p of this.projects()) for (const t of p.tags) s.add(t);
     return Array.from(s).sort();
   });
+
+  featuredProjects = computed(() => {
+    const cap = Math.max(0, this.admin.settings().featuredSlots?.maxSlots ?? 0);
+    if (cap === 0) return [];
+    return this.projects().filter((p) => p.featured).slice(0, cap);
+  });
+
+  channels = computed(() => this.admin.settings().channels ?? []);
 
   async ngOnInit(): Promise<void> {
     await this.refresh();

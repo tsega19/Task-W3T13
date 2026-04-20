@@ -71,3 +71,26 @@ Object.defineProperty(globalThis, 'matchMedia', {
     dispatchEvent: () => false
   })
 });
+
+// jsdom's File/Blob prototypes don't implement .arrayBuffer() in every jest
+// environment; bridge through FileReader so service code that awaits
+// file.arrayBuffer() works under test.
+if (typeof globalThis.File === 'function' && typeof globalThis.File.prototype.arrayBuffer !== 'function') {
+  globalThis.File.prototype.arrayBuffer = function () {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}
+
+// jsdom doesn't install URL.createObjectURL / revokeObjectURL — stub so
+// download-trigger paths can run and jest.spyOn can replace them.
+if (typeof globalThis.URL === 'function' && typeof globalThis.URL.createObjectURL !== 'function') {
+  globalThis.URL.createObjectURL = () => 'blob:jsdom-stub';
+}
+if (typeof globalThis.URL === 'function' && typeof globalThis.URL.revokeObjectURL !== 'function') {
+  globalThis.URL.revokeObjectURL = () => undefined;
+}

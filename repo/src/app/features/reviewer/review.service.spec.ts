@@ -84,4 +84,52 @@ describe('ReviewService', () => {
     const input = { reviewId: 'r', canvasId: 'c', projectId: 'p', priority: 'low' } as unknown as Parameters<ReturnType<typeof build>['svc']['createTicket']>[0];
     await expect(svc.createTicket(input)).rejects.toThrow(/1–200/);
   });
+
+  it('uploadAttachment persists a File blob into IndexedDB and returns the generated key', async () => {
+    const { svc, db } = build('editor');
+    const file = new File([new Uint8Array([1, 2, 3])], 'note.txt', { type: 'text/plain' });
+    const key = await svc.uploadAttachment(file);
+    expect(key).toBeTruthy();
+    const rec = await db.blobs.get(key);
+    expect(rec?.name).toBe('note.txt');
+    expect(rec?.mimeType).toBe('text/plain');
+    expect(rec?.sizeBytes).toBe(3);
+    // getAttachment round-trips the same record.
+    const round = await svc.getAttachment(key);
+    expect(round?.key).toBe(key);
+  });
+
+  it('uploadAttachment falls back to octet-stream when the File has no MIME type', async () => {
+    const { svc, db } = build('editor');
+    const file = new File([new Uint8Array([0])], 'blob', { type: '' });
+    const key = await svc.uploadAttachment(file);
+    const rec = await db.blobs.get(key);
+    expect(rec?.mimeType).toBe('application/octet-stream');
+  });
+
+  it('addAttachmentToTicket appends a unique key; removeAttachmentFromTicket strips it', async () => {
+    const { svc } = build('editor');
+    const r = await svc.createReview({ canvasId: 'c', projectId: 'p', content: 'ok' });
+    const t = await svc.createTicket({ reviewId: r.id, canvasId: 'c', projectId: 'p', title: 't', description: 'd', priority: 'low' });
+    await svc.addAttachmentToTicket(t.id, 'k1');
+    // Idempotent — same key twice does not duplicate.
+    await svc.addAttachmentToTicket(t.id, 'k1');
+    let refreshed = (await svc.listTickets()).find((x) => x.id === t.id);
+    expect(refreshed?.attachmentIds).toEqual(['k1']);
+    await svc.addAttachmentToTicket(t.id, 'k2');
+    await svc.removeAttachmentFromTicket(t.id, 'k1');
+    refreshed = (await svc.listTickets()).find((x) => x.id === t.id);
+    expect(refreshed?.attachmentIds).toEqual(['k2']);
+    // Removing a missing ticket is a silent no-op.
+    await expect(svc.removeAttachmentFromTicket('missing', 'kx')).resolves.toBeUndefined();
+    // Adding to a missing ticket throws.
+    await expect(svc.addAttachmentToTicket('missing', 'kx')).rejects.toThrow(/not found/);
+  });
+
+  it('createTicket honors a caller-provided attachmentIds array', async () => {
+    const { svc } = build('editor');
+    const r = await svc.createReview({ canvasId: 'c', projectId: 'p', content: 'ok' });
+    const t = await svc.createTicket({ reviewId: r.id, canvasId: 'c', projectId: 'p', title: 't', description: 'd', priority: 'low', attachmentIds: ['k1', 'k2'] });
+    expect(t.attachmentIds).toEqual(['k1', 'k2']);
+  });
 });

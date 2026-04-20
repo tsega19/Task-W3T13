@@ -5,6 +5,7 @@ import { DbService } from '../../core/services/db.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PermissionService } from '../../core/services/permission.service';
 import { AppConfigService, buildAppConfig } from '../../config/app-config.service';
+import { AdminService, AdminSettings } from '../admin/admin.service';
 import { signal } from '@angular/core';
 import { SessionInfo } from '../../core/models/models';
 
@@ -22,6 +23,7 @@ function fakeAuth(role: 'admin' | 'editor' | 'reviewer'): Partial<AuthService> {
 describe('ProjectService', () => {
   beforeEach(async () => {
     (globalThis as unknown as { __resetIndexedDB: () => void }).__resetIndexedDB();
+    localStorage.clear();
   });
 
   function build(role: 'admin' | 'editor' | 'reviewer', cfgOverrides = {}): { svc: ProjectService; db: DbService } {
@@ -30,6 +32,25 @@ describe('ProjectService', () => {
       providers: [
         { provide: AppConfigService, useValue: cfg(cfgOverrides) },
         { provide: AuthService, useValue: fakeAuth(role) }
+      ]
+    });
+    return { svc: TestBed.inject(ProjectService), db: TestBed.inject(DbService) };
+  }
+
+  function buildWithAdmin(
+    role: 'admin' | 'editor' | 'reviewer',
+    adminSettings: Partial<AdminSettings>,
+    authOverride?: Partial<AuthService>,
+    cfgOverrides = {}
+  ): { svc: ProjectService; db: DbService } {
+    TestBed.resetTestingModule();
+    const auth = authOverride ?? fakeAuth(role);
+    const adminMock = { settings: signal(adminSettings as AdminSettings) } as unknown as AdminService;
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AppConfigService, useValue: cfg(cfgOverrides) },
+        { provide: AuthService, useValue: auth },
+        { provide: AdminService, useValue: adminMock }
       ]
     });
     return { svc: TestBed.inject(ProjectService), db: TestBed.inject(DbService) };
@@ -163,5 +184,116 @@ describe('ProjectService', () => {
     await svc.createCanvas(p.id, 'c1');
     const refreshed = await db.projects.get(p.id);
     expect(refreshed?.canvasCount).toBe(1);
+  });
+
+  it('validateName coerces a null/undefined name to empty via the ?? fallback, then rejects it for length', () => {
+    const { svc } = build('admin');
+    // Hits `(name ?? '').trim()` fallback branch.
+    expect(svc.validateName(undefined as unknown as string, []).ok).toBe(false);
+    expect(svc.validateName(null as unknown as string, []).ok).toBe(false);
+  });
+
+  it('validateTags coerces a null tag entry to empty via the ?? fallback, then rejects it for length', () => {
+    const { svc } = build('admin');
+    // Hits `(t ?? '').trim()` fallback branch on the iteration.
+    expect(svc.validateTags([null as unknown as string]).ok).toBe(false);
+  });
+
+  it('create() throws "Each tag must be 1–30 characters." when tagCheck fails after trim+filter', async () => {
+    const { svc } = build('admin');
+    // One over-long tag survives the trim+filter pipeline and trips validateTags inside create().
+    await expect(svc.create({ name: 'Ok', tags: ['a'.repeat(31)] })).rejects.toThrow(/1–30/);
+  });
+
+  it('create() stamps createdBy="anonymous" when the session has no userId (?? anonymous fallback)', async () => {
+    // Supply an AuthService whose session() returns null — forces the ?? 'anonymous' branch.
+    const anonAuth = { session: signal<SessionInfo | null>(null), role: (() => null) as unknown as AuthService['role'] };
+    const { svc } = buildWithAdmin('admin', { featuredSlots: { maxSlots: 1, rotationDays: 14 } }, anonAuth);
+    const p = await svc.create({ name: 'Anon' });
+    expect(p.createdBy).toBe('anonymous');
+  });
+
+  it('setPinned(false) emits the "project.unpin" audit label (false branch of the ternary)', async () => {
+    const { svc, db } = build('admin');
+    const p = await svc.create({ name: 'P' });
+    await svc.setPinned(p.id, true);
+    await svc.setPinned(p.id, false);
+    const unpinEntry = (await db.audit.all()).find((a) => a.action === 'project.unpin');
+    expect(unpinEntry?.entityId).toBe(p.id);
+  });
+
+  it('setFeatured(false) emits the "project.unfeature" audit label (false branch of the ternary)', async () => {
+    const { svc, db } = build('admin');
+    const p = await svc.create({ name: 'P' });
+    await svc.setFeatured(p.id, true);
+    await svc.setFeatured(p.id, false);
+    const unfeat = (await db.audit.all()).find((a) => a.action === 'project.unfeature');
+    expect(unfeat?.entityId).toBe(p.id);
+  });
+
+  it('setFeatured tolerates a missing featuredSlots policy — maxSlots ?? 0 falls through to 0', async () => {
+    // Inject an AdminService whose settings have NO featuredSlots object;
+    // production `hydrate()` would always populate it, but the `?? 0`
+    // defensive fallback still has to be reachable.
+    const { svc, db } = buildWithAdmin('admin', { /* featuredSlots intentionally omitted */ });
+    const p = await svc.create({ name: 'A' });
+    const q = await svc.create({ name: 'B' });
+    await svc.setFeatured(p.id, true);
+    // maxSlots=0 means the cap is exhausted by any featured row → setting q
+    // featured should evict p first.
+    await svc.setFeatured(q.id, true);
+    const all = await db.projects.all();
+    expect(all.find((x) => x.id === p.id)?.featured).toBe(false);
+    expect(all.find((x) => x.id === q.id)?.featured).toBe(true);
+  });
+
+  it('setFeatured with maxSlots>1 keeps multiple projects featured until the cap is crossed', async () => {
+    const { svc, db } = buildWithAdmin('admin', { featuredSlots: { maxSlots: 2, rotationDays: 14 } });
+    const a = await svc.create({ name: 'A' });
+    const b = await svc.create({ name: 'B' });
+    const c = await svc.create({ name: 'C' });
+    await svc.setFeatured(a.id, true);
+    await svc.setFeatured(b.id, true);
+    let all = await db.projects.all();
+    expect(all.filter((x) => x.featured).length).toBe(2);
+    // Third one should evict the oldest-updated (a).
+    await svc.setFeatured(c.id, true);
+    all = await db.projects.all();
+    expect(all.find((x) => x.id === a.id)?.featured).toBe(false);
+    expect(all.filter((x) => x.featured).map((x) => x.id).sort()).toEqual([b.id, c.id].sort());
+  });
+
+  it('createCanvas coerces a null name through the ?? fallback, then rejects it for length', async () => {
+    const { svc } = build('admin');
+    const p = await svc.create({ name: 'P' });
+    await expect(svc.createCanvas(p.id, null as unknown as string)).rejects.toThrow(/1–100/);
+  });
+
+  it('createCanvas stamps createdBy="anonymous" when there is no session', async () => {
+    const anonAuth = { session: signal<SessionInfo | null>(null), role: (() => null) as unknown as AuthService['role'] };
+    const { svc, db } = buildWithAdmin('admin', { featuredSlots: { maxSlots: 1, rotationDays: 14 } }, anonAuth);
+    // Seed a parent project directly (bypassing create's perm.enforce, which we've covered elsewhere).
+    await db.projects.put({ id: 'p-anon', name: 'Anon', description: '', tags: [], pinned: false, featured: false, createdAt: 1, updatedAt: 1, createdBy: 'anonymous', canvasCount: 0 });
+    const c = await svc.createCanvas('p-anon', 'new-canvas');
+    expect(c.createdBy).toBe('anonymous');
+  });
+
+  it('deleteCanvas is a silent no-op when the canvas id does not exist', async () => {
+    const { svc } = build('admin');
+    await expect(svc.deleteCanvas('does-not-exist')).resolves.toBeUndefined();
+  });
+
+  it('deleteCanvas cascades delete of image blobs referenced by elements', async () => {
+    const { svc, db } = build('admin');
+    const p = await svc.create({ name: 'P' });
+    const c = await svc.createCanvas(p.id, 'C');
+    // Add an image-typed element whose imageRef points at a blob, and persist the blob.
+    await db.blobs.put({ key: 'imgX', name: 'pic.png', mimeType: 'image/png', sizeBytes: 1, data: new Uint8Array([0]).buffer, createdAt: 1 });
+    const full = (await db.canvases.get(c.id))!;
+    full.elements.push({ id: 'el-x', type: 'image', x: 0, y: 0, width: 10, height: 10, imageRef: 'imgX' });
+    await db.canvases.put(full);
+    await svc.deleteCanvas(c.id);
+    // The element's imageRef blob must be cascaded by deleteCanvas.
+    expect(await db.blobs.get('imgX')).toBeUndefined();
   });
 });
